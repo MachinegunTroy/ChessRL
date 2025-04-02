@@ -8,7 +8,6 @@ import time
 import random
 from PythonChessAgent import DQNNet, DQNAgent
 
-
 class ChessEnv(gym.Env):
     def __init__(self):
         super(ChessEnv, self).__init__()
@@ -46,14 +45,9 @@ class ChessEnv(gym.Env):
         return list(self.board.legal_moves)
 
     def step(self, action):
-        """
-        Decodes the action and applies the move.
-        Action is an integer in [0, 20479]:
-          - promotion_flag = action // 4096 (0 means no promotion; 1,2,3,4 specify promotions)
-          - base_move = action % 4096, where:
-              from_square = base_move // 64
-              to_square   = base_move % 64
-        """
+        # Store the color of the moving agent.
+        moving_color = self.board.turn  # True for White, False for Black.
+
         # Decode promotion flag and the underlying move.
         promotion_flag = action // 4096  # 0 to 4.
         base_move = action % 4096         # 0 to 4095.
@@ -63,37 +57,42 @@ class ChessEnv(gym.Env):
         # Get the moving piece.
         piece = self.board.piece_at(from_square)
 
-        # Construct the move. If the move is a pawn move reaching promotion rank,
-        # use the promotion flag. Otherwise, ignore promotion_flag.
-        move = chess.Move(from_square, to_square)  # default move.
+        # Construct the move. For pawn moves reaching the last rank, use the promotion flag.
+        move = chess.Move(from_square, to_square)
         if piece and piece.piece_type == chess.PAWN:
             rank = chess.square_rank(to_square)
             if (piece.color == chess.WHITE and rank == 7) or (piece.color == chess.BLACK and rank == 0):
-                # Pawn is moving to the last rank; it must promote.
-                # Map promotion_flag to a promotion piece.
-                # 1 -> Knight, 2 -> Bishop, 3 -> Rook, 4 -> Queen.
                 promotion_mapping = {1: chess.KNIGHT, 2: chess.BISHOP, 3: chess.ROOK, 4: chess.QUEEN}
-                # If promotion_flag is 0 (i.e. agent did not choose a promotion),
-                # default to queen promotion.
                 promotion_piece = promotion_mapping.get(promotion_flag, chess.QUEEN)
                 move = chess.Move(from_square, to_square, promotion=promotion_piece)
 
-        # Check for an illegal move.
+        illegal = False
+        # Check if the chosen move is illegal.
         if move not in self.board.legal_moves:
-            reward = -1.0  # Penalty for illegal moves.
-            done = True
-            return self.get_observation(), reward, done, {"illegal_move": True}
+            illegal = True
+            # Apply a penalty for the illegal move.
+            penalty = -1.0
+            # Choose a random legal move instead.
+            legal_moves = list(self.board.legal_moves)
+            if legal_moves:
+                move = random.choice(legal_moves)
+            else:
+                # If no legal moves are available, end the game.
+                return self.get_observation(), -1.0, True, {"illegal_move": True}
 
-        # Initialize reward.
-        reward = 0.0
+        # For every legal move, start with a base reward of +1.
+        reward = 1.0
+        if illegal:
+            reward += -1.0  # Subtract the illegal move penalty.
 
-        # Reward for capturing: determine what piece is captured.
+        # Additional reward for castling.
+        if self.board.is_castling(move):
+            reward += 0.5
+
+        # Reward for capturing an opponent's piece.
         if self.board.is_capture(move):
             if self.board.is_en_passant(move):
-                if self.board.turn == chess.WHITE:
-                    captured_square = move.to_square - 8
-                else:
-                    captured_square = move.to_square + 8
+                captured_square = move.to_square - 8 if moving_color == chess.WHITE else move.to_square + 8
             else:
                 captured_square = move.to_square
 
@@ -109,26 +108,25 @@ class ChessEnv(gym.Env):
                 }
                 reward += piece_values[captured_piece.piece_type]
 
-        # Execute the move.
+        # Execute the (now legal) move.
         self.board.push(move)
 
-        # Check for game termination.
+        # Check if the game is over.
         done = self.board.is_game_over()
         if done:
             outcome = self.board.outcome(claim_draw=True)
             if outcome is not None:
                 if outcome.termination == chess.Termination.CHECKMATE:
-                    # For demonstration, assume agent plays as White.
-                    if outcome.winner == chess.WHITE:
+                    # Reward from the perspective of the agent who just moved.
+                    if outcome.winner == moving_color:
                         reward += 10  # Win bonus.
-                    elif outcome.winner == chess.BLACK:
+                    else:
                         reward -= 10  # Loss penalty.
-                # Other terminations (stalemate, repetition, etc.) could be
-                # rewarded neutrally or with a slight penalty/bonus.
                 else:
-                    reward += 0
+                    reward += 0  # Neutral reward for draws/other terminations.
 
-        return self.get_observation(), reward, done, {}
+        return self.get_observation(), reward, done, {"illegal_move": illegal}
+
 
     def render(self, mode='human'):
         # Create the window and canvas once.
@@ -180,56 +178,3 @@ class ChessEnv(gym.Env):
     def close(self):
         if hasattr(self, 'window'):
             self.window.destroy()
-
-if __name__ == "__main__":
-    episodes = 1000    # Number of training episodes.
-    max_steps = 200    # Maximum moves per episode.
-    action_size = 20480
-
-    # Create agents for White and Black.
-    agent_white = DQNAgent(state_size=(8, 8), action_size=action_size)
-    agent_black = DQNAgent(state_size=(8, 8), action_size=action_size)
-
-    env = ChessEnv()
-
-    for e in range(episodes):
-        state = env.reset()  # state is an 8x8 array.
-        done = False
-        step_count = 0
-
-        while not done and step_count < max_steps:
-            current_color = env.board.turn  # True for White, False for Black.
-            prev_state = state.copy()
-            if current_color == chess.WHITE:
-                action = agent_white.act(state)
-            else:
-                action = agent_black.act(state)
-
-            state, reward, done, info = env.step(action)
-            if current_color == chess.WHITE:
-                agent_white.remember(prev_state, action, reward, state, done)
-                agent_white.replay()
-            else:
-                agent_black.remember(prev_state, action, reward, state, done)
-                agent_black.replay()
-            step_count += 1
-
-        print(f"Episode {e+1}/{episodes} finished after {step_count} moves. Epsilon White: {agent_white.epsilon:.2f}, Black: {agent_black.epsilon:.2f}")
-
-    # Save trained models.
-    agent_white.save("dqn_agent_white.pt")
-    agent_black.save("dqn_agent_black.pt")
-
-    # Optional: play a final game with the trained agents.
-    state = env.reset()
-    while not env.board.is_game_over():
-        current_color = env.board.turn
-        if current_color == chess.WHITE:
-            action = agent_white.act(state)
-        else:
-            action = agent_black.act(state)
-        state, reward, done, info = env.step(action)
-        env.render()
-        time.sleep(0.5)
-
-    env.window.mainloop()

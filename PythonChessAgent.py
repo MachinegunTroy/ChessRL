@@ -23,7 +23,7 @@ class DQNNet(nn.Module):
 
 class DQNAgent:
     def __init__(self, state_size, action_size, learning_rate=0.001, gamma=0.95,
-                 epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995, batch_size=32):
+                epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995, batch_size=32):
         self.state_size = state_size      # e.g. (8,8)
         self.action_size = action_size    # 20480
         self.memory = deque(maxlen=2000)
