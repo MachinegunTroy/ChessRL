@@ -70,48 +70,46 @@ class ChessEnv(gym.Env):
         # Check if the chosen move is illegal.
         if move not in self.board.legal_moves:
             illegal = True
-            # Apply a penalty for the illegal move.
-            penalty = -1.0
-            # Choose a random legal move instead.
+            # Set reward for illegal move.
+            reward = -1.0
+            # Substitute a random legal move so that the game can continue.
             legal_moves = list(self.board.legal_moves)
             if legal_moves:
                 move = random.choice(legal_moves)
             else:
-                # If no legal moves are available, end the game.
-                return self.get_observation(), -1.0, True, {"illegal_move": True}
+                return self.get_observation(), reward, True, {"illegal_move": True}
+        else:
+            # For legal moves, start with a base reward of +1.
+            reward = 1.0
 
-        # For every legal move, start with a base reward of +1.
-        reward = 1.0
-        if illegal:
-            reward += -1.0  # Subtract the illegal move penalty.
+        # Only add bonuses for legal moves (if not already penalized).
+        if not illegal:
+            # Additional reward for castling.
+            if self.board.is_castling(move):
+                reward += 0.5
 
-        # Additional reward for castling.
-        if self.board.is_castling(move):
-            reward += 0.5
+            # Reward for capturing an opponent's piece.
+            if self.board.is_capture(move):
+                if self.board.is_en_passant(move):
+                    captured_square = move.to_square - 8 if moving_color == chess.WHITE else move.to_square + 8
+                else:
+                    captured_square = move.to_square
+                captured_piece = self.board.piece_at(captured_square)
+                if captured_piece:
+                    piece_values = {
+                        chess.PAWN: 1,
+                        chess.KNIGHT: 3,
+                        chess.BISHOP: 3,
+                        chess.ROOK: 5,
+                        chess.QUEEN: 9,
+                        chess.KING: 0
+                    }
+                    reward += piece_values[captured_piece.piece_type]
 
-        # Reward for capturing an opponent's piece.
-        if self.board.is_capture(move):
-            if self.board.is_en_passant(move):
-                captured_square = move.to_square - 8 if moving_color == chess.WHITE else move.to_square + 8
-            else:
-                captured_square = move.to_square
-
-            captured_piece = self.board.piece_at(captured_square)
-            if captured_piece:
-                piece_values = {
-                    chess.PAWN: 1,
-                    chess.KNIGHT: 3,
-                    chess.BISHOP: 3,
-                    chess.ROOK: 5,
-                    chess.QUEEN: 9,
-                    chess.KING: 0
-                }
-                reward += piece_values[captured_piece.piece_type]
-
-        # Execute the (now legal) move.
+        # Execute the move.
         self.board.push(move)
 
-        # Check if the game is over.
+        # Check for game termination.
         done = self.board.is_game_over()
         if done:
             outcome = self.board.outcome(claim_draw=True)
@@ -126,6 +124,7 @@ class ChessEnv(gym.Env):
                     reward += 0  # Neutral reward for draws/other terminations.
 
         return self.get_observation(), reward, done, {"illegal_move": illegal}
+
 
 
     def render(self, mode='human'):
